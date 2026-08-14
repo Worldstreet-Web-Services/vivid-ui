@@ -11,6 +11,7 @@ import type { VividState } from "@/lib/vivid/state";
 export interface PresenceHandle {
   setState(next: Exclude<VividState, "assembling">): void;
   getState(): VividState;
+  setListeningStream(stream: MediaStream | null): void;
   attachTts(el: HTMLMediaElement): void;
   dispose(): void;
 }
@@ -132,7 +133,7 @@ export function createPresence(host: HTMLElement, events: PresenceEvents): Prese
     for (const [k, u] of Object.entries(weights)) {
       gsap.to(u, { value: k === next ? 1 : 0, duration: 1.1, ease: "power2.inOut" });
     }
-    if (next === "listening") void audio.attachMic();
+    if (next === "listening" && !audio.hasInput()) void audio.attachMic();
     events.onState(state, audio.intensity);
   }
 
@@ -169,15 +170,33 @@ export function createPresence(host: HTMLElement, events: PresenceEvents): Prese
     const bands = uniforms.uBands.value;
     let bass = 0,
       treble = 0;
+    const bandFollow = state === "speaking" ? 0.68 : 0.4;
     for (let i = 0; i < 16; i++) {
-      bands[i] += (audio.bands[i] - bands[i]) * 0.4;
+      bands[i] += (audio.bands[i] - bands[i]) * bandFollow;
       if (i < 4) bass += bands[i] / 4;
       if (i > 11) treble += bands[i] / 4;
     }
-    uniforms.uBass.value += (bass - uniforms.uBass.value) * 0.2;
-    uniforms.uTreble.value += (treble - uniforms.uTreble.value) * 0.3;
-    uniforms.uIntensity.value =
-      state === "speaking" ? audio.intensity : audio.intensity * 0.35;
+    uniforms.uBass.value += (bass - uniforms.uBass.value) * (state === "speaking" ? 0.34 : 0.2);
+    uniforms.uTreble.value +=
+      (treble - uniforms.uTreble.value) * (state === "speaking" ? 0.42 : 0.3);
+
+    const spectralPulse = Math.min(1, bass * 0.85 + treble * 0.45);
+    const targetIntensity =
+      state === "speaking"
+        ? Math.min(1, audio.intensity * 1.08 + spectralPulse * 0.72)
+        : audio.intensity * 0.35;
+    const intensityFollow =
+      state === "speaking"
+        ? targetIntensity > uniforms.uIntensity.value
+          ? 0.42
+          : 0.16
+        : 0.12;
+    uniforms.uIntensity.value += (targetIntensity - uniforms.uIntensity.value) * intensityFollow;
+    const bloomTarget =
+      state === "speaking"
+        ? Math.min(0.52, 0.34 + 0.11 * uniforms.uIntensity.value + 0.08 * spectralPulse)
+        : 0.32;
+    bloom.strength += (bloomTarget - bloom.strength) * 0.18;
 
     uniforms.uYaw.value += (targetYaw - uniforms.uYaw.value) * 0.04;
     uniforms.uPitch.value += (targetPitch - uniforms.uPitch.value) * 0.04;
@@ -195,6 +214,13 @@ export function createPresence(host: HTMLElement, events: PresenceEvents): Prese
   return {
     setState,
     getState: () => state,
+    setListeningStream: (stream) => {
+      if (stream) {
+        audio.attachStream(stream);
+        return;
+      }
+      audio.detach();
+    },
     attachTts: (el) => audio.attachElement(el),
     dispose() {
       cancelAnimationFrame(frame);

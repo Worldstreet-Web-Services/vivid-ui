@@ -10,6 +10,7 @@ export class AudioField {
   private analyser: AnalyserNode | null = null;
   private fft: Uint8Array<ArrayBuffer> | null = null;
   private micStream: MediaStream | null = null;
+  private ownsStream = false;
 
   private ensureCtx(): AudioContext {
     if (!this.ctx) this.ctx = new AudioContext();
@@ -21,19 +22,31 @@ export class AudioField {
     const ctx = this.ensureCtx();
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 512;
-    this.analyser.smoothingTimeConstant = 0.75;
+    // Lower analyser smoothing keeps speech transients visible in motion.
+    this.analyser.smoothingTimeConstant = 0.58;
     this.fft = new Uint8Array(this.analyser.frequencyBinCount);
     node.connect(this.analyser);
   }
 
+  private connectStream(stream: MediaStream, ownsStream: boolean) {
+    this.detach();
+    this.micStream = stream;
+    this.ownsStream = ownsStream;
+    this.wire(this.ensureCtx().createMediaStreamSource(stream));
+  }
+
   async attachMic(): Promise<boolean> {
     try {
-      this.micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      this.wire(this.ensureCtx().createMediaStreamSource(this.micStream));
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.connectStream(stream, true);
       return true;
     } catch {
       return false;
     }
+  }
+
+  attachStream(stream: MediaStream) {
+    this.connectStream(stream, false);
   }
 
   // The TTS playback element goes here once the voice service exists.
@@ -44,10 +57,15 @@ export class AudioField {
   }
 
   detach() {
-    this.micStream?.getTracks().forEach((t) => t.stop());
+    if (this.ownsStream) this.micStream?.getTracks().forEach((t) => t.stop());
     this.micStream = null;
+    this.ownsStream = false;
     this.analyser = null;
     this.fft = null;
+  }
+
+  hasInput(): boolean {
+    return Boolean(this.analyser && this.fft);
   }
 
   // speaking=true drives the noise fallback with a speech-like envelope
@@ -56,14 +74,19 @@ export class AudioField {
       this.analyser.getByteFrequencyData(this.fft);
       const per = Math.floor(this.fft.length / 16);
       let sum = 0;
+      const attack = speaking ? 0.62 : 0.35;
+      const release = speaking ? 0.24 : 0.2;
       for (let b = 0; b < 16; b++) {
         let acc = 0;
         for (let i = 0; i < per; i++) acc += this.fft[b * per + i];
         const v = acc / per / 255;
-        this.bands[b] += (v - this.bands[b]) * 0.35;
+        const follow = v > this.bands[b] ? attack : release;
+        this.bands[b] += (v - this.bands[b]) * follow;
         sum += this.bands[b];
       }
-      this.intensity += (sum / 16 - this.intensity) * 0.2;
+      const target = sum / 16;
+      const intensityFollow = target > this.intensity ? (speaking ? 0.44 : 0.22) : 0.16;
+      this.intensity += (target - this.intensity) * intensityFollow;
       return;
     }
     // seeded drift: layered incommensurate sines, per-band phase

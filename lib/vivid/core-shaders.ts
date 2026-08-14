@@ -85,7 +85,14 @@ void main() {
   float rr = rho;
   if (aType > 3.5) {
     a = ang + uTime * speed * (1.6 * spin);
-    rr = rho * (1.0 + uSpeak * uIntensity * 0.14 - uListen * 0.05 + uBass * 0.05);
+    // Orbit ring and beam blades: widen and pulse with speech intensity.
+    float beamPulse = sin(uTime * (8.0 + uIntensity * 10.0) + aSeed * 12.0) * 0.5 + 0.5;
+    rr = rho * (
+      1.0
+      + uSpeak * (uIntensity * 0.16 + bandAmp * 0.07 + beamPulse * 0.03)
+      - uListen * 0.05
+      + uBass * 0.05
+    );
   } else if (aType < 0.5) {
     rr = rho + bandAmp * 0.03 * (0.35 + uSpeak) + breath * 0.012;
 
@@ -175,10 +182,11 @@ void main() {
   } else if (aType < 3.5) {
     vGlow = 0.32 * flick;
   } else if (aType < 4.5) {
-    vGlow = (0.5 + uBass * 0.5) * flick;          // horizon ring
+    vGlow = (0.36 + uBass * 0.28 + uSpeak * (0.16 + uIntensity * 0.46 + bandAmp * 0.2)) * flick;
   } else {
-    vGlow = (0.45 + uIntensity * 0.6) * aTint * flick;  // blades, tapering
+    vGlow = (0.3 + uSpeak * (0.16 + uIntensity * 0.56 + bandAmp * 0.26)) * aTint * flick;
   }
+  vGlow = min(vGlow, 1.15);
 
   float size = 1.5;
   if (aType > 0.5 && aType < 1.5) size = 1.8;
@@ -186,6 +194,9 @@ void main() {
   if (aType > 2.5 && aType < 3.5) size = 1.6;
   if (aType > 3.5 && aType < 4.5) size = 1.4;
   if (aType > 4.5) size = 1.5 + aTint * 0.9;
+  if (aType > 3.5) {
+    size *= 1.0 + uSpeak * (0.06 + uIntensity * 0.22 + bandAmp * 0.1);
+  }
   size *= 0.75 + vGlow * 0.6;
   gl_PointSize = size * uSizeScale * ease / max(0.5, vDepth * 0.5);
 }
@@ -228,7 +239,7 @@ void main() {
     alpha *= 0.85;
   } else if (vType > 3.5) {                // the ring lining the horizon
     col = mix(vec3(0.32, 0.72, 1.0), vec3(0.75, 0.95, 1.0), vTint);
-    col = mix(col, vec3(1.0, 0.9, 0.7), uSpeak * uIntensity * 0.5);
+    col = mix(col, vec3(1.0, 0.88, 0.66), uSpeak * uIntensity * 0.22);
     alpha *= 0.8;
   } else if (vType > 2.5) {                // embers
     col = mix(vec3(1.0, 0.62, 0.24), vec3(1.0, 0.87, 0.6), vTint);
@@ -240,7 +251,7 @@ void main() {
     col = mix(vec3(1.0, 0.35, 0.05), vec3(1.0, 0.78, 0.32), vTint * 0.7 + 0.15);
     col = mix(col, vec3(0.25, 0.75, 1.0), uListen * 0.65);
     col = mix(col, vec3(0.5, 0.3, 0.9), uThink * 0.6);
-    col = mix(col, vec3(1.0, 0.95, 0.8), uSpeak * (0.35 + uIntensity * 0.5));
+    col = mix(col, vec3(1.0, 0.9, 0.72), uSpeak * (0.2 + uIntensity * 0.28));
   } else {                                 // the galaxy shell
     col = ramp(vTint);
     // IDLE keeps the full spectrum; the other three each take a hue so the
@@ -250,6 +261,7 @@ void main() {
     col = mix(col, vec3(1.00, 0.72, 0.26), uSpeak * 0.6);   // gold, warm
   }
 
-  gl_FragColor = vec4(col * (0.35 + vGlow * 0.65), alpha * (0.035 + vGlow * 0.075));
+  float glowMapped = vGlow / (1.0 + vGlow * 0.85);
+  gl_FragColor = vec4(col * (0.35 + glowMapped * 0.62), alpha * (0.03 + glowMapped * 0.055));
 }
 `;

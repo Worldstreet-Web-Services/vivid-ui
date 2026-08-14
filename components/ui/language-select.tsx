@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { LANGUAGES, LANGUAGE_NAMES, type Language } from "@/lib/vivid/state";
 
+const ENABLED_LANGUAGES: Language[] = ["EN", "YO", "IG", "PCM"];
+
 export function LanguageSelect({
   value,
   onChange,
@@ -39,26 +41,35 @@ export function LanguageSelect({
           role="listbox"
           className="absolute bottom-[calc(100%+8px)] right-0 min-w-[10.5rem] overflow-hidden rounded-lg border border-[#7DF3FF]/30 bg-black/85 backdrop-blur-sm"
         >
-          {LANGUAGES.map((l) => (
-            <li key={l}>
-              <button
-                role="option"
-                aria-selected={l === value}
-                onClick={() => {
-                  onChange(l);
-                  setOpen(false);
-                }}
-                className={`flex w-full items-center justify-between gap-6 px-3.5 py-2.5 text-left text-[10px] tracking-[0.22em] transition-colors ${
-                  l === value
-                    ? "bg-[#FFB03A]/10 text-[#FFB03A]"
-                    : "text-[#7DF3FF]/65 hover:bg-[#7DF3FF]/8 hover:text-[#7DF3FF]"
-                }`}
-              >
-                <span>{LANGUAGE_NAMES[l].toUpperCase()}</span>
-                <span className="opacity-60">{l}</span>
-              </button>
-            </li>
-          ))}
+          {LANGUAGES.map((l) => {
+            const enabled = ENABLED_LANGUAGES.includes(l);
+            return (
+              <li key={l}>
+                <button
+                  role="option"
+                  aria-selected={l === value}
+                  aria-disabled={!enabled}
+                  onClick={() => {
+                    if (!enabled) return;
+                    onChange(l);
+                    setOpen(false);
+                  }}
+                  className={`flex w-full items-center justify-between gap-6 px-3.5 py-2.5 text-left text-[10px] tracking-[0.22em] transition-colors ${
+                    !enabled ? "cursor-not-allowed text-[#7DF3FF]/28" : ""
+                  } ${
+                    l === value
+                      ? "bg-[#FFB03A]/10 text-[#FFB03A]"
+                      : enabled
+                        ? "text-[#7DF3FF]/65 hover:bg-[#7DF3FF]/8 hover:text-[#7DF3FF]"
+                        : ""
+                  }`}
+                >
+                  <span>{LANGUAGE_NAMES[l].toUpperCase()}</span>
+                  <span className="opacity-60">{l}</span>
+                </button>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
 
