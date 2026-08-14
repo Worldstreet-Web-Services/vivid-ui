@@ -76,6 +76,8 @@ export function PresenceCanvas() {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const recordingRef = useRef(false);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const startRecordingRef = useRef<(() => Promise<void>) | null>(null);
+  const stopRecordingRef = useRef<(() => void) | null>(null);
   const audioQueueRef = useRef<string[]>([]);
   const currentAudioUrlRef = useRef<string | null>(null);
   const playingQueuedAudioRef = useRef(false);
@@ -188,8 +190,8 @@ export function PresenceCanvas() {
         if (disposed) return;
         setConnected(false);
         setNetworkStatus(`disconnected - reconnecting... (${wsHost})`);
-        stopTtsPlayback();
-        clearAudioQueue();
+        // Keep any in-flight speech playing; a socket reconnect should not cut
+        // off audio already received and queued locally.
         if (recordingRef.current) {
           recordingRef.current = false;
           setRecording(false);
@@ -333,6 +335,13 @@ export function PresenceCanvas() {
     const audio = new Audio();
     ttsAudioRef.current = audio;
     if (handle.current) handle.current.attachTts(audio);
+    const settleIdleIfPlaybackFinished = () => {
+      if (audioQueueRef.current.length > 0) return;
+      if (!audio.paused) return;
+      if (playingQueuedAudioRef.current) return;
+      setNetworkStatus("ready");
+      handle.current?.setState("idle");
+    };
     const onEnded = () => {
       if (currentAudioUrlRef.current) {
         URL.revokeObjectURL(currentAudioUrlRef.current);
@@ -361,8 +370,11 @@ export function PresenceCanvas() {
       }
 
       playingQueuedAudioRef.current = false;
-      setNetworkStatus("ready");
-      handle.current?.setState("idle");
+      settleIdleIfPlaybackFinished();
+    };
+    const onPause = () => {
+      // Fallback: some environments miss `ended`; pause+empty queue means done.
+      window.setTimeout(settleIdleIfPlaybackFinished, 60);
     };
     const onError = () => {
       if (currentAudioUrlRef.current) {
@@ -374,10 +386,12 @@ export function PresenceCanvas() {
       handle.current?.setState("idle");
     };
     audio.addEventListener("ended", onEnded);
+    audio.addEventListener("pause", onPause);
     audio.addEventListener("error", onError);
     return () => {
       audio.pause();
       audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("pause", onPause);
       audio.removeEventListener("error", onError);
       if (currentAudioUrlRef.current) URL.revokeObjectURL(currentAudioUrlRef.current);
       currentAudioUrlRef.current = null;
@@ -484,6 +498,9 @@ export function PresenceCanvas() {
     setNetworkStatus("transcribing...");
   };
 
+  startRecordingRef.current = startRecording;
+  stopRecordingRef.current = stopRecording;
+
   const resetConversation = () => {
     if (recordingRef.current) {
       recordingRef.current = false;
@@ -507,6 +524,36 @@ export function PresenceCanvas() {
 
     setNetworkStatus("not connected yet");
   };
+
+  useEffect(() => {
+    const isInteractiveTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      if (target.isContentEditable) return true;
+      const tag = target.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON") return true;
+      return Boolean(target.closest("button,[role='button'],[role='option'],[role='listbox']"));
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== "Space") return;
+      if (event.repeat) return;
+      if (isInteractiveTarget(event.target)) return;
+
+      event.preventDefault();
+      if (assembling || !connected) return;
+
+      if (recordingRef.current) {
+        stopRecordingRef.current?.();
+        return;
+      }
+      void startRecordingRef.current?.();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [assembling, connected]);
 
   useEffect(() => {
     return () => {
