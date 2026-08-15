@@ -13,8 +13,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "bake": "vite-node -c vitest.config.ts scripts/bake-forms.ts"
+    "test:watch": "vitest"
   },
   "dependencies": {
     "gsap": "^3.15.0",
@@ -34,7 +33,6 @@
     "postcss": "^8.5.26",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vite-node": "^6.0.0",
     "vitest": "^4.1.10"
   }
 }
