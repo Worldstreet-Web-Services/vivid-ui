@@ -13,6 +13,8 @@ import {
   type VividState,
 } from "@/lib/vivid/state";
 import { LanguageSelect } from "@/components/ui/language-select";
+import { useFormRotation } from "@/hooks/use-form-rotation";
+import { FormControls } from "@/components/presence/form-controls";
 
 const GLYPHS = "!<>-_\\/[]{}=+*^?#";
 const WS_ENDPOINTS = [
@@ -105,6 +107,10 @@ export function PresenceCanvas() {
       throw err;
     }
   }, []);
+
+  // Constellation at rest, human when she is addressed, the businesses shown
+  // off while she is left alone.
+  useFormRotation(handle);
 
   useEffect(() => {
     recordingRef.current = recording;
@@ -681,6 +687,8 @@ export function PresenceCanvas() {
       <p className="pointer-events-none absolute bottom-[5.25rem] left-1/2 z-10 -translate-x-1/2 text-center text-[9px] tracking-[0.2em] text-[#7DF3FF]/58 sm:bottom-[6.25rem] sm:text-[10px] group-data-[gpu=off]:hidden">
         {networkStatus}
       </p>
+
+      <FormControls handle={handle} />
     </main>
   );
 }

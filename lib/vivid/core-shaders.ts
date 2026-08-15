@@ -6,9 +6,31 @@ attribute vec4 aOrbit;   // radius, angle, inclination, speed
 attribute float aSeed;
 attribute float aTint;
 attribute float aType;
+attribute vec3 aTarget;  // where this particle sits in the form being morphed to
+attribute float aRegion; // which part of that form: see REGION in lib/vivid/bands
+attribute float aRim;    // how squarely it sits on the silhouette, 0..1
+
+// Matches REGION in lib/vivid/bands.ts.
+#define R_RIM 0.0
+#define R_INTERIOR 1.0
+#define R_CORE 2.0
+#define R_FILAMENT 3.0
+#define R_CROWN 4.0
+#define R_ATMOSPHERE 5.0
+#define R_ARC 6.0
+#define R_HALO 7.0
+
+// How much of the morph is spent staggering particles rather than moving them.
+// Without it every particle leaves at once and the change reads as a cut; with
+// it the mass reorganises in a wave.
+#define MORPH_STAGGER 0.35
 
 uniform float uTime;
 uniform float uAsm;        // 0..1 assembly
+uniform float uMorph;      // 0..1 toward aTarget; 0 is the constellation
+uniform float uDissolve;   // 0..1, peaks mid-way out of a form
+uniform vec3 uCoreAnchor;  // where the current form's energy lives
+uniform float uCoreRadius; // how far it reaches
 uniform float uListen;
 uniform float uThink;
 uniform float uSpeak;
@@ -25,6 +47,9 @@ varying float vType;
 varying float vGlow;
 varying float vSeed;
 varying float vDepth;
+varying float vRegion;
+varying float vForm;     // how far into the form we are, so the constellation is untouched
+varying float vEdge;     // how squarely on the silhouette, for the fragment palette
 
 float hash(float n) { return fract(sin(n) * 43758.5453123); }
 
@@ -150,6 +175,54 @@ void main() {
   vec3 scattered = normalize(p + 0.001) * (R + (1.0 - ease) * (4.0 + aSeed * 5.0));
   p = mix(scattered, p, ease);
 
+  // ---- morph: the same particles reorganise into a named form ----
+  //
+  // The assembly above is this same idea applied once at boot, from a scattered
+  // cloud to the galaxy. This generalises it: any form can be the destination,
+  // and the particle keeps its identity across every one of them.
+  //
+  // At uMorph = 0 this is exactly p. mProg clamps to 0, mEase is
+  // 1 - pow(1, 3) = 0, and mix(p, aTarget, 0.0) returns p unchanged — so the
+  // constellation is bit-for-bit what it was before this existed.
+  float mDelay = aSeed * MORPH_STAGGER;
+  float mProg = clamp((uMorph - mDelay) / (1.0 - MORPH_STAGGER), 0.0, 1.0);
+  float mEase = 1.0 - pow(1.0 - mProg, 3.0);
+  vec3 formPos = aTarget;
+
+  // ---- the form is never quite still ----
+  if (uMorph > 0.001) {
+    // CROWN sheds upward and drifts off, which is what stops the top of the
+    // head reading as a cut line.
+    if (aRegion > R_CROWN - 0.5 && aRegion < R_CROWN + 0.5) {
+      float rise = fract(uTime * 0.09 + aSeed);
+      formPos.y += rise * 0.16;
+      formPos.x += sin(uTime * 0.5 + aSeed * 30.0) * 0.02 * rise;
+      formPos.z += cos(uTime * 0.4 + aSeed * 21.0) * 0.02 * rise;
+    }
+    // Everything else breathes: a slow swell, stronger on the body than the
+    // head, so it reads as alive rather than bouncing.
+    float breathe = sin(uTime * 0.42) * 0.5 + 0.5;
+    formPos *= 1.0 + breathe * 0.004 * (1.0 - formPos.y);
+    // and a small wander around home so the surface shimmers
+    formPos += swirl(formPos * 6.0, uTime * 0.25) * 0.0022;
+  }
+
+  p = mix(p, formPos, mEase);
+
+  // ---- coming apart ----
+  // Leaving a form is not the arrival played backwards. Particles let go of the
+  // structure unevenly, stream outward, and only then fall back into the
+  // galaxy — so the figure loosens and breaks up rather than tidily unwinding.
+  if (uDissolve > 0.001) {
+    float loosen = uDissolve * (0.35 + aSeed * 0.9);
+    p += normalize(p + 0.001) * loosen * 0.55;
+    p += swirl(p, uTime * 0.9) * uDissolve * 0.22;
+  }
+
+  vRegion = aRegion;
+  vForm = mEase * step(0.001, uMorph);
+  vEdge = pow(aRim, 2.2);
+
   // ---- pointer parallax ----
   float cy = cos(uYaw), sy = sin(uYaw);
   p = vec3(p.x * cy + p.z * sy, p.y, -p.x * sy + p.z * cy);
@@ -197,6 +270,57 @@ void main() {
   if (aType > 3.5) {
     size *= 1.0 + uSpeak * (0.06 + uIntensity * 0.22 + bandAmp * 0.1);
   }
+  // ---- the form's own light ----
+  if (vForm > 0.001) {
+    // The silhouette glows because grazing particles are brighter, not because
+    // more of them are crowded there.
+    float edge = pow(aRim, 2.2);
+    // The outline is the brightest line, not a floodlight. At 2.4 the stroke
+    // saturated to white and, blended additively over its neighbours, bleached
+    // the contour lines and the face out of the picture.
+    float lift = 0.35 + edge * 1.25;
+
+    // Every form has an anchor, so the states reach forms with no face: a car
+    // lights at its grille, a tower up its spine, a gold bar from its middle.
+    // Forms that name a CORE region get the precise treatment below on top of
+    // this; forms that do not still answer when she speaks.
+    float toCore = length(aTarget - uCoreAnchor);
+    float coreness = 1.0 - smoothstep(0.0, max(0.0001, uCoreRadius), toCore);
+    lift += coreness * (0.25 + uSpeak * (0.9 + uIntensity * 1.3) + uListen * 0.2);
+
+    // The face carries the voice: horizontal wave lines running across the
+    // amber oval, driven by the audio bands, crests going near-white.
+    if (aRegion > R_CORE - 0.5 && aRegion < R_CORE + 0.5) {
+      float wave = sin(aTarget.y * 180.0 - uTime * 2.6 + bandAmp * 7.0);
+      lift = 1.5 + wave * (0.5 + uSpeak * (0.9 + uIntensity * 1.4));
+    }
+    // Filaments surge a beat behind the voice, so the throat answers the face
+    // rather than moving with it.
+    if (aRegion > R_FILAMENT - 0.5 && aRegion < R_FILAMENT + 0.5) {
+      float lag = sin(uTime * 3.1 - 1.1 + aSeed * 4.0) * 0.5 + 0.5;
+      lift = 1.2 + uSpeak * lag * (0.8 + uIntensity);
+    }
+    if (aRegion > R_ARC - 0.5 && aRegion < R_ARC + 0.5) lift = 0.9 + edge * 1.2;
+    // The rings around her. Faint, and faintest furthest out, so they read as
+    // the room she is in and not as a target painted behind her.
+    if (aRegion > R_HALO - 0.5) lift = 0.34;
+    // The interior is the contour lines, and in the reference they are most
+    // of what you see. Brighter toward the edge, where the surface turns away
+    // from the viewer, so the figure reads as a solid with a rounded surface
+    // rather than a flat plate; and never below a floor, so the lines stay
+    // legible right through the middle of the face.
+    // The contour lines, lit by their own curvature: brighter where the surface
+    // turns away from the viewer. On her there is no drawn outline at all; the
+    // rim is these lines bunching at the edge, each one brighter for being
+    // there, and the two effects together are what make it blaze. So the edge
+    // term is not held back.
+    if (aRegion > R_INTERIOR - 0.5 && aRegion < R_INTERIOR + 0.5) lift = 0.5 + edge * 1.6;
+    if (aRegion > R_ATMOSPHERE - 0.5 && aRegion < R_ATMOSPHERE + 0.5) lift = 0.18;
+    if (aRegion > R_CROWN - 0.5 && aRegion < R_CROWN + 0.5) lift = 0.45;
+
+    vGlow = mix(vGlow, lift * flick, vForm);
+  }
+
   size *= 0.75 + vGlow * 0.6;
   gl_PointSize = size * uSizeScale * ease / max(0.5, vDepth * 0.5);
 }
@@ -213,6 +337,9 @@ varying float vType;
 varying float vGlow;
 varying float vSeed;
 varying float vDepth;
+varying float vRegion;
+varying float vForm;
+varying float vEdge;
 
 // The palette: violet, magenta, jade, cyan and gold, mixed in patches.
 vec3 ramp(float t) {
@@ -259,6 +386,41 @@ void main() {
     col = mix(col, vec3(0.20, 0.70, 1.00), uListen * 0.72); // cyan, cold
     col = mix(col, vec3(0.58, 0.28, 0.95), uThink * 0.68);  // violet, unsettled
     col = mix(col, vec3(1.00, 0.72, 0.26), uSpeak * 0.6);   // gold, warm
+  }
+
+  // ---- the form's palette ----
+  // The same particles, so the same colours. A form keeps each particle's own
+  // place on the spectrum, and it is what a flat single-hue treatment lost:
+  // one cyan everywhere reads as a toy, the full ramp reads as the
+  // constellation having taken a shape. The silhouette stroke goes to a hot
+  // near-white, so the outline is the brightest thing on screen; the interior
+  // keeps its colour but sits back, so the lines read as lines through a solid.
+  if (vForm > 0.001) {
+    vec3 own = ramp(vTint);
+    // The reference: a deep electric blue through the body, running to bright
+    // cyan at the outline. Each particle keeps a trace of its own place on the
+    // spectrum, so the body shimmers rather than sitting flat, but blue is the
+    // key. The stroke stops at cyan; white is reserved for the crest of the
+    // face, or the outline bleaches everything around it.
+    vec3 deep = vec3(0.05, 0.32, 0.92);
+    vec3 cyan = vec3(0.30, 0.86, 1.0);
+    vec3 body = mix(deep, own, 0.22);
+    vec3 formCol = mix(body, cyan, vEdge);
+    if (vRegion > 1.5 && vRegion < 2.5) {
+      // face: gold through to a near-white crest
+      formCol = mix(vec3(1.0, 0.42, 0.0), vec3(1.0, 0.96, 0.76), clamp(vGlow - 0.9, 0.0, 1.0));
+    } else if (vRegion > 2.5 && vRegion < 3.5) {
+      formCol = vec3(1.0, 0.69, 0.23);          // throat filaments
+    } else if (vRegion > 3.5 && vRegion < 4.5) {
+      formCol = mix(own, vec3(0.7, 0.96, 1.0), 0.6); // crown, cooler as it leaves
+    } else if (vRegion > 4.5 && vRegion < 5.5) {
+      formCol = own * 0.7;                       // atmosphere: its own colour, dimmer
+    } else if (vRegion > 6.5) {
+      formCol = mix(deep, cyan, 0.45) * 0.8;     // halo rings: the room's blue
+    }
+    // Speaking still warms the whole figure a little, as it does the galaxy.
+    formCol = mix(formCol, vec3(1.0, 0.86, 0.6), uSpeak * uIntensity * 0.14);
+    col = mix(col, formCol, vForm);
   }
 
   float glowMapped = vGlow / (1.0 + vGlow * 0.85);
