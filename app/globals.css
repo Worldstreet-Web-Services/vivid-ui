@@ -1,10 +1,107 @@
 @import "tailwindcss";
 
+/* The brand, as the CSS sees it. The same values live in lib/vivid/palette.ts
+   for the shader; change one, change the other. Silver is the voice of the
+   interface, gold is her accent, green is her attention. */
+@theme {
+  --color-silver-deep: #6e7480;
+  --color-silver: #b8bec8;
+  --color-silver-bright: #eef1f5;
+  --color-green: #3fa66b;
+  --color-green-bright: #7fd69c;
+  --color-gold: #d4a73a;
+  --color-gold-bright: #f5de8a;
+  --color-warm-white: #fff8ec;
+}
+
 :root {
   color-scheme: dark;
 }
 
 body {
   background: #000;
-  color: #7df3ff;
+  color: var(--color-silver);
+  font-family: var(--font-body), sans-serif;
+}
+
+/* ---------------------------------------------------------------------------
+   The HUD's motion grammar.
+
+   Taken from how holographic interfaces move (docs/research-futuristic-ai-
+   presence.md §2): a panel arrives, its frame traces itself, its corners snap
+   on, its content flickers up in steps rather than fading, one scan sweeps
+   it, then it rests. Dismissal is the reverse with the colour draining first.
+   Every element in the interface uses these and only these, so the whole
+   thing moves as one instrument.
+   ------------------------------------------------------------------------- */
+@theme {
+  /* The same tokens the frontend uses, so `font-display` and `font-hud`
+     utilities exist here with the same faces behind them. */
+  --font-display: var(--font-display), sans-serif;
+  --font-hud: var(--font-body), sans-serif;
+}
+
+/* A panel arriving: the stuttered flicker-on, not a fade. */
+@keyframes hud-panel-in {
+  0%   { opacity: 0; transform: translateY(6px); }
+  55%  { opacity: 0.45; }
+  65%  { opacity: 0.95; }
+  75%  { opacity: 0.35; }
+  85%  { opacity: 1; }
+  100% { opacity: 1; transform: none; }
+}
+
+/* A frame drawing itself. Set stroke-dasharray to the path length. */
+@keyframes hud-trace {
+  to { stroke-dashoffset: 0; }
+}
+
+/* Corner brackets snapping on. */
+@keyframes hud-corner {
+  to { opacity: 1; }
+}
+
+/* Content coming up in steps. */
+@keyframes hud-body-in {
+  0%   { opacity: 0; }
+  45%  { opacity: 0.35; }
+  70%  { opacity: 0.85; }
+  100% { opacity: 1; }
+}
+
+/* One bright line sweeping down, once. */
+@keyframes hud-scan {
+  0%   { opacity: 1; background-position: 0 -100%; }
+  100% { opacity: 0; background-position: 0 200%; }
+}
+
+/* At rest: a slow breath. */
+@keyframes hud-idle {
+  0%, 100% { opacity: 0.85; }
+  50%      { opacity: 1; }
+}
+
+/* A readout line ticking in during boot. */
+@keyframes hud-line-in {
+  to { opacity: 1; }
+}
+
+/* The wordmark during boot. */
+@keyframes hud-boot-pulse {
+  50% { opacity: 0.5; }
+}
+
+/* Leaving: colour drains, then it recedes. */
+@keyframes hud-dismiss {
+  0%   { opacity: 1; filter: none; }
+  35%  { opacity: 0.9; filter: saturate(0) brightness(1.4); }
+  100% { opacity: 0; filter: saturate(0) blur(6px); transform: scale(0.96); }
+}
+
+/* Reduced motion: everything is simply present. */
+@media (prefers-reduced-motion: reduce) {
+  .hud-motion, .hud-motion * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

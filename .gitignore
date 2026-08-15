@@ -46,3 +46,4 @@ next-env.d.ts
 # Reference footage, kept locally for tuning.
 *.mov
 *.mp4
+.scratch/

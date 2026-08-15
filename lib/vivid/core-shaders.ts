@@ -6,50 +6,36 @@ attribute vec4 aOrbit;   // radius, angle, inclination, speed
 attribute float aSeed;
 attribute float aTint;
 attribute float aType;
-attribute vec3 aTarget;  // where this particle sits in the form being morphed to
-attribute float aRegion; // which part of that form: see REGION in lib/vivid/bands
-attribute float aRim;    // how squarely it sits on the silhouette, 0..1
-
-// Matches REGION in lib/vivid/bands.ts.
-#define R_RIM 0.0
-#define R_INTERIOR 1.0
-#define R_CORE 2.0
-#define R_FILAMENT 3.0
-#define R_CROWN 4.0
-#define R_ATMOSPHERE 5.0
-#define R_ARC 6.0
-#define R_HALO 7.0
-
-// How much of the morph is spent staggering particles rather than moving them.
-// Without it every particle leaves at once and the change reads as a cut; with
-// it the mass reorganises in a wave.
-#define MORPH_STAGGER 0.35
 
 uniform float uTime;
 uniform float uAsm;        // 0..1 assembly
-uniform float uMorph;      // 0..1 toward aTarget; 0 is the constellation
-uniform float uDissolve;   // 0..1, peaks mid-way out of a form
-uniform vec3 uCoreAnchor;  // where the current form's energy lives
-uniform float uCoreRadius; // how far it reaches
 uniform float uListen;
 uniform float uThink;
 uniform float uSpeak;
+uniform float uConnect;
+uniform float uError;
 uniform float uIntensity;
+uniform float uInputLevel;   // her hearing: the microphone
+uniform float uOutputLevel;  // her voice: the TTS
+uniform float uBeatPhase;
+uniform float uBeatOnset;
+uniform float uSurge;
 uniform float uBass;
 uniform float uTreble;
 uniform float uBands[16];
 uniform float uSizeScale;
 uniform float uYaw;
 uniform float uPitch;
+// The same pointer, followed more slowly, for the far plane.
+uniform float uYawFar;
+uniform float uPitchFar;
 
 varying float vTint;
 varying float vType;
 varying float vGlow;
 varying float vSeed;
 varying float vDepth;
-varying float vRegion;
-varying float vForm;     // how far into the form we are, so the constellation is untouched
-varying float vEdge;     // how squarely on the silhouette, for the fragment palette
+varying float vShed;     // how far this particle has peeled off the body, 0..1
 
 float hash(float n) { return fract(sin(n) * 43758.5453123); }
 
@@ -104,8 +90,21 @@ void main() {
   //   LISTENING the whole mass trembles in place, taut and alert
   //   THINKING  matter scatters outward from the centre in continuous bursts
   //   SPEAKING  rings of energy race outward from the horizon
-  float flatten = 1.0 + uThink * 0.5 - uSpeak * 0.25;
-  float spin    = 1.0 - uListen * 0.5 + uThink * 0.5 + uSpeak * 0.25;
+  float flatten = 1.0 + uThink * 0.5 - uSpeak * 0.25 + uError * 0.35;
+  float spin    = 1.0 - uListen * 0.5 + uThink * 0.5 + uSpeak * 0.25 - uConnect * 0.6 - uError * 0.7;
+
+  // ATTENTION. Listening is not only a tremble: the whole mass tightens toward
+  // its centre on the strength of what she hears, so when you speak she
+  // visibly gathers toward you, and eases back out as you pause. Driven by the
+  // input level, never the output: this is her hearing, not her voice.
+  float attend = uListen * uInputLevel;
+  // CONNECTING. She is waking: the mass sits loose and dim and slowly draws in,
+  // the horizon ring beating slowly underneath, before she is fully here.
+  float waking = uConnect * (0.5 + 0.5 * sin(uTime * 1.9));
+  // ERROR. The line is lost: the mass sags outward and slackens.
+  float sag = uError;
+  // SURGE. Every state change arrives: a brief tightening that settles.
+  float arrive = uSurge;
 
   float rr = rho;
   if (aType > 3.5) {
@@ -120,6 +119,9 @@ void main() {
     );
   } else if (aType < 0.5) {
     rr = rho + bandAmp * 0.03 * (0.35 + uSpeak) + breath * 0.012;
+    // Gathers toward you as you speak; slackens on the lost line; draws in
+    // while waking; tightens on every arrival.
+    rr *= 1.0 - attend * 0.09 - arrive * 0.06 + sag * 0.12 - uConnect * 0.05 + waking * 0.02;
 
     // IDLE — one slow faint pulse leaving the horizon, so she reads as alive
     // and waiting rather than paused. Fades out as any other state takes over.
@@ -143,6 +145,9 @@ void main() {
     if (uSpeak > 0.01) {
       float rad = radiation(R, uTime, 1.0 + uIntensity);
       rr += uSpeak * rad * (0.06 + uIntensity * 0.14);
+      // And on the beat of her voice the shells lift together, so the mass
+      // pulses on her cadence rather than only on her loudness.
+      rr += uSpeak * uBeatOnset * 0.05 * smoothstep(0.3, 1.0, R);
     }
   }
 
@@ -154,16 +159,33 @@ void main() {
   // shiver, like a taut string or a held breath. It moves nowhere; it vibrates.
   if (uListen > 0.01 && aType < 3.5) {
     float f = 34.0 + aSeed * 26.0;
-    float amp = (0.006 + bandAmp * 0.022) * uListen;
+    // The tremble is hers; its size is yours. Louder into the mic, tauter she is.
+    float amp = (0.006 + uInputLevel * 0.028) * uListen;
     p += amp * vec3(
       sin(uTime * f + aSeed * 61.0),
       sin(uTime * f * 1.13 + aSeed * 37.0),
       sin(uTime * f * 0.87 + aSeed * 19.0));
   }
 
-  // ---- turbulence, stronger while thinking ----
+  // ---- turbulence, gated by its own magnitude ----
+  // The body of the presence should hold still while energy sheds off it. So
+  // the swirl is not applied evenly: each particle is pushed by pow(d, 4) of
+  // its own displacement, which leaves the many nearly where they were and
+  // lets the few most-displaced peel away. Without the gate the whole cloud
+  // jiggles; with it, a stable presence sheds. (After tgcnzn's visualiser.)
+  vShed = 0.0;
   if (aType < 1.5) {
-    p += swirl(p, uTime) * (0.012 + uThink * 0.11 + uIntensity * 0.02);
+    float amount = 0.06 + uThink * 0.34 + uIntensity * 0.08;
+    vec3 push = swirl(p, uTime) * amount;
+    // Three sines rarely all sit near zero, so length(push) alone would let
+    // most of the shell drift. The gate is taken past a threshold and then
+    // steepened, so the body genuinely holds and only the tail sheds. Measured
+    // over the swirl's distribution: about a fifth of the shell moves
+    // perceptibly, one particle in seventeen peels away, the rest holds.
+    float dn = clamp(length(push) / (amount * 1.7321), 0.0, 1.0);
+    float gate = pow(smoothstep(0.65, 1.0, dn), 4.0);
+    p += push * gate;
+    vShed = gate;
   } else if (aType > 2.5) {
     p += swirl(p, uTime * 0.3) * 0.06;
   }
@@ -175,58 +197,18 @@ void main() {
   vec3 scattered = normalize(p + 0.001) * (R + (1.0 - ease) * (4.0 + aSeed * 5.0));
   p = mix(scattered, p, ease);
 
-  // ---- morph: the same particles reorganise into a named form ----
-  //
-  // The assembly above is this same idea applied once at boot, from a scattered
-  // cloud to the galaxy. This generalises it: any form can be the destination,
-  // and the particle keeps its identity across every one of them.
-  //
-  // At uMorph = 0 this is exactly p. mProg clamps to 0, mEase is
-  // 1 - pow(1, 3) = 0, and mix(p, aTarget, 0.0) returns p unchanged — so the
-  // constellation is bit-for-bit what it was before this existed.
-  float mDelay = aSeed * MORPH_STAGGER;
-  float mProg = clamp((uMorph - mDelay) / (1.0 - MORPH_STAGGER), 0.0, 1.0);
-  float mEase = 1.0 - pow(1.0 - mProg, 3.0);
-  vec3 formPos = aTarget;
-
-  // ---- the form is never quite still ----
-  if (uMorph > 0.001) {
-    // CROWN sheds upward and drifts off, which is what stops the top of the
-    // head reading as a cut line.
-    if (aRegion > R_CROWN - 0.5 && aRegion < R_CROWN + 0.5) {
-      float rise = fract(uTime * 0.09 + aSeed);
-      formPos.y += rise * 0.16;
-      formPos.x += sin(uTime * 0.5 + aSeed * 30.0) * 0.02 * rise;
-      formPos.z += cos(uTime * 0.4 + aSeed * 21.0) * 0.02 * rise;
-    }
-    // Everything else breathes: a slow swell, stronger on the body than the
-    // head, so it reads as alive rather than bouncing.
-    float breathe = sin(uTime * 0.42) * 0.5 + 0.5;
-    formPos *= 1.0 + breathe * 0.004 * (1.0 - formPos.y);
-    // and a small wander around home so the surface shimmers
-    formPos += swirl(formPos * 6.0, uTime * 0.25) * 0.0022;
-  }
-
-  p = mix(p, formPos, mEase);
-
-  // ---- coming apart ----
-  // Leaving a form is not the arrival played backwards. Particles let go of the
-  // structure unevenly, stream outward, and only then fall back into the
-  // galaxy — so the figure loosens and breaks up rather than tidily unwinding.
-  if (uDissolve > 0.001) {
-    float loosen = uDissolve * (0.35 + aSeed * 0.9);
-    p += normalize(p + 0.001) * loosen * 0.55;
-    p += swirl(p, uTime * 0.9) * uDissolve * 0.22;
-  }
-
-  vRegion = aRegion;
-  vForm = mEase * step(0.001, uMorph);
-  vEdge = pow(aRim, 2.2);
-
-  // ---- pointer parallax ----
-  float cy = cos(uYaw), sy = sin(uYaw);
+  // ---- pointer parallax, by depth ----
+  // Depth is the medium. If every particle turns by the same yaw the whole
+  // thing is one flat plane that swivels; what sells space is the planes
+  // moving at different rates. The star field behind her turns less than she
+  // does and lags a beat behind (uYawFar is the same pointer, damped harder),
+  // so the presence sits IN a field rather than on a backdrop.
+  float far = aType > 1.5 && aType < 2.5 ? 1.0 : 0.0;
+  float yaw = mix(uYaw, uYawFar * 0.45, far);
+  float pitch = mix(uPitch, uPitchFar * 0.45, far);
+  float cy = cos(yaw), sy = sin(yaw);
   p = vec3(p.x * cy + p.z * sy, p.y, -p.x * sy + p.z * cy);
-  float cp = cos(uPitch), sp = sin(uPitch);
+  float cp = cos(pitch), sp = sin(pitch);
   p = vec3(p.x, p.y * cp - p.z * sp, p.y * sp + p.z * cp);
 
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
@@ -235,6 +217,8 @@ void main() {
 
   // ---- brightness ----
   float flick = 0.65 + 0.35 * hash(aSeed * 31.0 + floor(uTime * 3.0));
+  // The lost line: the flicker goes ragged, the whole field dimmer.
+  flick = mix(flick, flick * (0.55 + 0.45 * hash(aSeed * 7.0 + floor(uTime * 11.0))), uError);
   if (aType < 0.5) {
     // brighter toward the outside of the shell, so the mass has a lit edge
     vGlow = (0.3 + smoothstep(0.5, 0.98, R) * 0.7) * flick
@@ -270,88 +254,66 @@ void main() {
   if (aType > 3.5) {
     size *= 1.0 + uSpeak * (0.06 + uIntensity * 0.22 + bandAmp * 0.1);
   }
-  // ---- the form's own light ----
-  if (vForm > 0.001) {
-    // The silhouette glows because grazing particles are brighter, not because
-    // more of them are crowded there.
-    float edge = pow(aRim, 2.2);
-    // The outline is the brightest line, not a floodlight. At 2.4 the stroke
-    // saturated to white and, blended additively over its neighbours, bleached
-    // the contour lines and the face out of the picture.
-    float lift = 0.35 + edge * 1.25;
-
-    // Every form has an anchor, so the states reach forms with no face: a car
-    // lights at its grille, a tower up its spine, a gold bar from its middle.
-    // Forms that name a CORE region get the precise treatment below on top of
-    // this; forms that do not still answer when she speaks.
-    float toCore = length(aTarget - uCoreAnchor);
-    float coreness = 1.0 - smoothstep(0.0, max(0.0001, uCoreRadius), toCore);
-    lift += coreness * (0.25 + uSpeak * (0.9 + uIntensity * 1.3) + uListen * 0.2);
-
-    // The face carries the voice: horizontal wave lines running across the
-    // amber oval, driven by the audio bands, crests going near-white.
-    if (aRegion > R_CORE - 0.5 && aRegion < R_CORE + 0.5) {
-      float wave = sin(aTarget.y * 180.0 - uTime * 2.6 + bandAmp * 7.0);
-      lift = 1.5 + wave * (0.5 + uSpeak * (0.9 + uIntensity * 1.4));
-    }
-    // Filaments surge a beat behind the voice, so the throat answers the face
-    // rather than moving with it.
-    if (aRegion > R_FILAMENT - 0.5 && aRegion < R_FILAMENT + 0.5) {
-      float lag = sin(uTime * 3.1 - 1.1 + aSeed * 4.0) * 0.5 + 0.5;
-      lift = 1.2 + uSpeak * lag * (0.8 + uIntensity);
-    }
-    if (aRegion > R_ARC - 0.5 && aRegion < R_ARC + 0.5) lift = 0.9 + edge * 1.2;
-    // The rings around her. Faint, and faintest furthest out, so they read as
-    // the room she is in and not as a target painted behind her.
-    if (aRegion > R_HALO - 0.5) lift = 0.34;
-    // The interior is the contour lines, and in the reference they are most
-    // of what you see. Brighter toward the edge, where the surface turns away
-    // from the viewer, so the figure reads as a solid with a rounded surface
-    // rather than a flat plate; and never below a floor, so the lines stay
-    // legible right through the middle of the face.
-    // The contour lines, lit by their own curvature: brighter where the surface
-    // turns away from the viewer. On her there is no drawn outline at all; the
-    // rim is these lines bunching at the edge, each one brighter for being
-    // there, and the two effects together are what make it blaze. So the edge
-    // term is not held back.
-    if (aRegion > R_INTERIOR - 0.5 && aRegion < R_INTERIOR + 0.5) lift = 0.5 + edge * 1.6;
-    if (aRegion > R_ATMOSPHERE - 0.5 && aRegion < R_ATMOSPHERE + 0.5) lift = 0.18;
-    if (aRegion > R_CROWN - 0.5 && aRegion < R_CROWN + 0.5) lift = 0.45;
-
-    vGlow = mix(vGlow, lift * flick, vForm);
-  }
-
+  // Waking: the horizon ring is her heartbeat before she is here.
+  if (aType > 3.5 && aType < 4.5) vGlow += waking * 0.9;
+  // Arrival: over-bright for an instant, then it settles into the state.
+  vGlow *= 1.0 + arrive * 0.9;
+  // Lost line: dim.
+  vGlow *= 1.0 - uError * 0.45;
   size *= 0.75 + vGlow * 0.6;
+  // Shed particles swell as they leave, so the wisps read as energy rather
+  // than as stray dots.
+  size *= 1.0 + vShed * 1.6;
   gl_PointSize = size * uSizeScale * ease / max(0.5, vDepth * 0.5);
 }
 `;
 
 export const CORE_FRAG = /* glsl */ `
+uniform float uTime;
 uniform float uListen;
 uniform float uThink;
 uniform float uSpeak;
+uniform float uConnect;
+uniform float uError;
 uniform float uIntensity;
+uniform float uSurge;
+
+// The brand, handed in from lib/vivid/palette.ts so the shader and the chrome
+// share one definition. Silver is the body, gold the metal at her core, green
+// the colour of her attention. Nothing else appears.
+uniform vec3 uSilverDeep;
+uniform vec3 uSilver;
+uniform vec3 uSilverBright;
+uniform vec3 uGreen;
+uniform vec3 uGreenBright;
+uniform vec3 uGold;
+uniform vec3 uGoldBright;
+uniform vec3 uWhite;
 
 varying float vTint;
 varying float vType;
 varying float vGlow;
 varying float vSeed;
 varying float vDepth;
-varying float vRegion;
-varying float vForm;
-varying float vEdge;
+varying float vShed;     // how far this particle has peeled off the body, 0..1
 
-// The palette: violet, magenta, jade, cyan and gold, mixed in patches.
+// The body's palette: metallic silver, shadow through highlight, with sparse
+// patches of green and gold set into it. The patches are what keeps silver
+// from reading as grey: a few particles in every hundred carry the brand's
+// two accents, so at rest she is unmistakably silver and unmistakably ours.
 vec3 ramp(float t) {
-  vec3 violet = vec3(0.51, 0.24, 0.94);
-  vec3 magenta = vec3(0.93, 0.24, 0.71);
-  vec3 jade   = vec3(0.24, 0.93, 0.62);
-  vec3 cyan   = vec3(0.29, 0.78, 1.0);
-  vec3 gold   = vec3(1.0,  0.74, 0.29);
-  if (t < 0.25) return mix(violet, magenta, t / 0.25);
-  if (t < 0.5)  return mix(magenta, jade,  (t - 0.25) / 0.25);
-  if (t < 0.75) return mix(jade,   cyan,   (t - 0.5)  / 0.25);
-  return mix(cyan, gold, (t - 0.75) / 0.25);
+  // The metal itself, over most of the range.
+  vec3 metal = t < 0.5
+    ? mix(uSilverDeep, uSilver, t / 0.5)
+    : mix(uSilver, uSilverBright, (t - 0.5) / 0.5);
+  // Two narrow bands of accent, at fixed places on the tint so the same
+  // particles carry them from frame to frame rather than flickering.
+  // Green gets the wider band: it is the accent silver hides most easily,
+  // and at rest all three colours of the brand should be readable.
+  float greenBand = smoothstep(0.26, 0.31, t) * (1.0 - smoothstep(0.40, 0.45, t));
+  float goldBand  = smoothstep(0.67, 0.71, t) * (1.0 - smoothstep(0.74, 0.78, t));
+  vec3 col = mix(metal, uGreen, greenBand * 0.9);
+  return mix(col, uGold, goldBand * 0.85);
 }
 
 void main() {
@@ -361,69 +323,61 @@ void main() {
   float alpha = smoothstep(0.5, 0.0, d);
 
   vec3 col;
-  if (vType > 4.5) {                       // blades: gold, hot at the belly
-    col = mix(vec3(1.0, 0.78, 0.2), vec3(1.0, 0.97, 0.82), vTint * 0.55);
+  if (vType > 4.5) {                       // blades: gold, hot to near-white at the belly
+    col = mix(uGold, uGoldBright, vTint * 0.7);
+    col = mix(col, uWhite, vTint * vTint * 0.35);
     alpha *= 0.85;
-  } else if (vType > 3.5) {                // the ring lining the horizon
-    col = mix(vec3(0.32, 0.72, 1.0), vec3(0.75, 0.95, 1.0), vTint);
-    col = mix(col, vec3(1.0, 0.88, 0.66), uSpeak * uIntensity * 0.22);
+  } else if (vType > 3.5) {                // the ring lining the horizon: silver
+    col = mix(uSilver, uSilverBright, vTint);
+    col = mix(col, uGoldBright, uSpeak * uIntensity * 0.22);
     alpha *= 0.8;
-  } else if (vType > 2.5) {                // embers
-    col = mix(vec3(1.0, 0.62, 0.24), vec3(1.0, 0.87, 0.6), vTint);
-    alpha *= 2.2;
-  } else if (vType > 1.5) {                // stars
-    col = mix(vec3(0.75, 0.83, 1.0), vec3(1.0, 0.94, 0.85), vTint);
+  } else if (vType > 2.5) {                // embers: dim gold, drifting off
+    col = mix(uGold * 0.7, uGoldBright, vTint * 0.5);
+    alpha *= 1.8;
+  } else if (vType > 1.5) {                // stars: silver-white points
+    col = mix(uSilverBright, uWhite, vTint);
     alpha *= 4.5;
-  } else if (vType > 0.5) {                // accretion ring
-    col = mix(vec3(1.0, 0.35, 0.05), vec3(1.0, 0.78, 0.32), vTint * 0.7 + 0.15);
-    col = mix(col, vec3(0.25, 0.75, 1.0), uListen * 0.65);
-    col = mix(col, vec3(0.5, 0.3, 0.9), uThink * 0.6);
-    col = mix(col, vec3(1.0, 0.9, 0.72), uSpeak * (0.2 + uIntensity * 0.28));
-  } else {                                 // the galaxy shell
+  } else if (vType > 0.5) {                // accretion ring: the gold at her core
+    col = mix(uGold, uGoldBright, vTint * 0.7 + 0.15);
+    // The states reach the core too, more gently than the shell.
+    col = mix(col, uGreenBright, uListen * 0.45);
+    col = mix(col, uSilverBright, uThink * 0.5);
+    col = mix(col, uWhite, uSpeak * (0.2 + uIntensity * 0.28));
+  } else {                                 // the galaxy shell: silver, with the accents in it
     col = ramp(vTint);
-    // IDLE keeps the full spectrum; the other three each take a hue so the
-    // state is legible at a glance and never ambiguous
-    col = mix(col, vec3(0.20, 0.70, 1.00), uListen * 0.72); // cyan, cold
-    col = mix(col, vec3(0.58, 0.28, 0.95), uThink * 0.68);  // violet, unsettled
-    col = mix(col, vec3(1.00, 0.72, 0.26), uSpeak * 0.6);   // gold, warm
+    // At rest the shell keeps its silver and its patches. Each state pulls it
+    // toward one colour and one meaning, so the state reads at a glance:
+    // green, she is attending; silver-white, she is working; gold, her voice.
+    col = mix(col, uGreen, uListen * 0.72);
+    col = mix(col, uSilverBright, uThink * 0.68);
+    col = mix(col, uGold, uSpeak * 0.6);
+    // Waking is silver going toward its shadow; the lost line drains her to
+    // the deepest silver, colour leaving before the light does.
+    col = mix(col, uSilverDeep, uConnect * 0.5);
+    col = mix(col, uSilverDeep, uError * 0.7);
   }
+  // Arrival flashes toward the warm white for an instant, whatever the state.
+  col = mix(col, uWhite, uSurge * 0.35);
 
-  // ---- the form's palette ----
-  // The same particles, so the same colours. A form keeps each particle's own
-  // place on the spectrum, and it is what a flat single-hue treatment lost:
-  // one cyan everywhere reads as a toy, the full ramp reads as the
-  // constellation having taken a shape. The silhouette stroke goes to a hot
-  // near-white, so the outline is the brightest thing on screen; the interior
-  // keeps its colour but sits back, so the lines read as lines through a solid.
-  if (vForm > 0.001) {
-    vec3 own = ramp(vTint);
-    // The reference: a deep electric blue through the body, running to bright
-    // cyan at the outline. Each particle keeps a trace of its own place on the
-    // spectrum, so the body shimmers rather than sitting flat, but blue is the
-    // key. The stroke stops at cyan; white is reserved for the crest of the
-    // face, or the outline bleaches everything around it.
-    vec3 deep = vec3(0.05, 0.32, 0.92);
-    vec3 cyan = vec3(0.30, 0.86, 1.0);
-    vec3 body = mix(deep, own, 0.22);
-    vec3 formCol = mix(body, cyan, vEdge);
-    if (vRegion > 1.5 && vRegion < 2.5) {
-      // face: gold through to a near-white crest
-      formCol = mix(vec3(1.0, 0.42, 0.0), vec3(1.0, 0.96, 0.76), clamp(vGlow - 0.9, 0.0, 1.0));
-    } else if (vRegion > 2.5 && vRegion < 3.5) {
-      formCol = vec3(1.0, 0.69, 0.23);          // throat filaments
-    } else if (vRegion > 3.5 && vRegion < 4.5) {
-      formCol = mix(own, vec3(0.7, 0.96, 1.0), 0.6); // crown, cooler as it leaves
-    } else if (vRegion > 4.5 && vRegion < 5.5) {
-      formCol = own * 0.7;                       // atmosphere: its own colour, dimmer
-    } else if (vRegion > 6.5) {
-      formCol = mix(deep, cyan, 0.45) * 0.8;     // halo rings: the room's blue
-    }
-    // Speaking still warms the whole figure a little, as it does the galaxy.
-    formCol = mix(formCol, vec3(1.0, 0.86, 0.6), uSpeak * uIntensity * 0.14);
-    col = mix(col, formCol, vForm);
-  }
+  // Shed energy burns bright: it lifts toward the warm white on its way out.
+  col = mix(col, uWhite, vShed * 0.55);
+
+  // ---- signal imperfection ----
+  // A presence that is perfectly clean reads as a screensaver. Two small
+  // things keep her a signal rather than a render: a per-pixel grain, and a
+  // rare, brief dip across the whole field, as if the carrier wavered. Both
+  // are a hair; this is imperfection, not damage. Every particle dips
+  // together, which is what makes it read as the signal and not as twinkle.
+  float grain = fract(sin(dot(gl_PointCoord + vSeed, vec2(12.9898, 78.233))) * 43758.5453);
+  float carrier = fract(sin(floor(uTime * 7.0) * 91.7) * 43758.5453);
+  float dip = carrier > 0.985 ? 0.72 : 1.0;   // measured: one 143ms dip every ten seconds
+  // On a lost line the dips come far more often and cut deeper.
+  dip = mix(dip, carrier > 0.86 ? 0.45 : 1.0, uError);
+  float signal = dip * (0.94 + grain * 0.06);
 
   float glowMapped = vGlow / (1.0 + vGlow * 0.85);
-  gl_FragColor = vec4(col * (0.35 + glowMapped * 0.62), alpha * (0.03 + glowMapped * 0.055));
+  gl_FragColor = vec4(
+    col * (0.35 + glowMapped * 0.62 + vShed * 0.3) * signal,
+    alpha * (0.03 + glowMapped * 0.055 + vShed * 0.04));
 }
 `;
