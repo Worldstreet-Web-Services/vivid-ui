@@ -6,8 +6,8 @@ import {
   ASSEMBLING,
   GREETING,
   INTENSITY,
-  LANGUAGES,
-  LANGUAGE_NAMES,
+  LANGUAGE_INFO,
+  SPOKEN_LANGUAGES,
   STATE_LINE,
   type Language,
   type VividState,
@@ -21,18 +21,10 @@ import { ViewportFrame } from "@/components/hud/viewport-frame";
 const GLYPHS = "!<>-_\\/[]{}=+*^?#";
 const WS_ENDPOINTS = [
   process.env.NEXT_PUBLIC_VIVID_WS_URL,
-  "wss://qwxeep3sudzk43-8002.proxy.runpod.net/ws",
-  "wss://8e07lkd5a2eyga-8002.proxy.runpod.net/ws",
+  "wss://qwxeep3sudzk43-8002.proxy.runpod.net/ws"
 ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
 const TARGET_SAMPLE_RATE = 16000;
 const AUDIO_BUFFER_SIZE = 2048;
-const VOICE_LANG_BY_UI: Record<Language, string> = {
-  EN: "en",
-  YO: "yo",
-  IG: "ig",
-  HA: "ha",
-  PCM: "pcm",
-};
 
 // Scrambles toward the target and always resolves to clean text (brief §1.7).
 function useScramble(target: string) {
@@ -67,7 +59,7 @@ export function PresenceCanvas() {
   const [pct, setPct] = useState(0);
   const [state, setState] = useState<VividState>("assembling");
   const [intensity, setIntensity] = useState(0);
-  const [lang, setLang] = useState<Language>("EN");
+  const [lang, setLang] = useState<Language>("en");
   const [connected, setConnected] = useState(false);
   // Read by the presence callback, which is created once and would otherwise
   // close over the first render's value.
@@ -92,6 +84,12 @@ export function PresenceCanvas() {
   useEffect(() => {
     if (!host.current) return;
     try {
+      // Under reduced motion there is no assembly to wait through: the scene
+      // reports "idle" from inside createPresence, before `presence` is bound.
+      // Reaching for it there threw and took the whole page with it, so the
+      // correction is held and applied on the far side of the call instead.
+      let built = false;
+      let correctToConnecting = false;
       const presence = createPresence(host.current, {
         onProgress: setPct,
         onState: (s, i) => {
@@ -101,9 +99,14 @@ export function PresenceCanvas() {
           // Assembly has just finished and she has gone idle by default. If
           // the socket has not opened yet she is not actually ready, so she
           // shows that instead of looking present with no line behind her.
-          if (s === "idle" && !connectedRef.current) presence.setState("connecting");
+          if (s === "idle" && !connectedRef.current) {
+            if (built) presence.setState("connecting");
+            else correctToConnecting = true;
+          }
         },
       });
+      built = true;
+      if (correctToConnecting && !connectedRef.current) presence.setState("connecting");
       handle.current = presence;
       if (ttsAudioRef.current) presence.attachTts(ttsAudioRef.current);
       return presence.dispose;
@@ -475,10 +478,14 @@ export function PresenceCanvas() {
     handle.current?.setListeningStream(stream);
     handle.current?.setState("listening");
 
+    // The language code goes on the wire as it is stored, and the voice with
+    // it: the service would pick a default otherwise, and English has two, so
+    // naming it is the only way the list can promise who will answer.
     ws.send(
       JSON.stringify({
         type: "start",
-        lang: VOICE_LANG_BY_UI[lang],
+        lang,
+        voice: LANGUAGE_INFO[lang].voice,
       }),
     );
 
@@ -642,7 +649,7 @@ export function PresenceCanvas() {
           VIVID
         </p>
         <p className="mt-2 max-w-[19ch] sm:max-w-none text-[8px] sm:text-[9px] leading-relaxed tracking-[0.18em] sm:tracking-[0.24em] text-silver-bright/40">
-          SHE SPEAKS {LANGUAGES.map((l) => LANGUAGE_NAMES[l].toUpperCase()).join(" · ")}
+          SHE SPEAKS {SPOKEN_LANGUAGES.map((name) => name.toUpperCase()).join(" · ")}
         </p>
       </div>
 
@@ -724,7 +731,7 @@ export function PresenceCanvas() {
           state={state}
           connected={connected}
           status={networkStatus}
-          language={LANGUAGE_NAMES[lang]}
+          language={`${LANGUAGE_INFO[lang].name} · ${LANGUAGE_INFO[lang].voiceName}`}
           className="max-w-[90vw]"
         />
         {assembling ? (
@@ -743,14 +750,18 @@ export function PresenceCanvas() {
         )}
       </div>
 
-      {/* The language, pinned to the corner. */}
-      {assembling ? null : (
-        <LanguageSelect
-          value={lang}
-          onChange={setLang}
-          className="absolute bottom-[max(2.25rem,env(safe-area-inset-bottom))] right-10 group-data-[gpu=off]:hidden sm:right-12 sm:bottom-10"
-        />
-      )}
+      {/* The language, pinned to the corner. Unlike the ring and the reset, it
+          is not held back until she has assembled: choosing the tongue she
+          answers in needs neither a formed presence nor an open socket, and
+          waiting six seconds for the control to exist read as it not being
+          there at all. */}
+      {/* The corner is the wrapper's business, not the control's: the control
+          keeps `relative` for its own dropdown to hang from, and Tailwind emits
+          `relative` after `absolute`, so passing the position in as a class had
+          it quietly win and strand the whole thing off the top-left edge. */}
+      <div className="absolute bottom-[max(2.25rem,env(safe-area-inset-bottom))] right-10 group-data-[gpu=off]:hidden sm:right-12 sm:bottom-10">
+        <LanguageSelect value={lang} onChange={setLang} />
+      </div>
 
     </main>
   );

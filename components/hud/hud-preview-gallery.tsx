@@ -36,7 +36,7 @@ export function HudPreviewGallery() {
         <TalkRing handle={fake} recording={true} disabled={false} onPress={() => {}} startLabel="START" stopLabel="STOP" />
         <TalkRing handle={fake} recording={false} disabled={true} onPress={() => {}} startLabel="START" stopLabel="STOP" />
         <div className="relative pt-40">
-          <LanguageSelect value="EN" onChange={() => {}} />
+          <LanguageSelect value="en" onChange={() => {}} />
         </div>
       </div>
       <div className="mt-16 flex flex-col gap-4">
