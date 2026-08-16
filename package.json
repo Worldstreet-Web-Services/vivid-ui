@@ -13,7 +13,8 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:shaders": "vite-node -c vitest.config.ts scripts/check-shaders.mts"
   },
   "dependencies": {
     "gsap": "^3.15.0",
@@ -33,6 +34,7 @@
     "postcss": "^8.5.26",
     "tailwindcss": "^4",
     "typescript": "^5",
+    "vite-node": "^6.0.0",
     "vitest": "^4.1.10"
   }
 }
