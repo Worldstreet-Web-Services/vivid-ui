@@ -38,7 +38,14 @@ export class WebGLUnavailableError extends Error {
 }
 
 export function createPresence(host: HTMLElement, events: PresenceEvents): PresenceHandle {
-  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  // Skip the assembly for anyone who asked for less motion, and, outside
+  // production, for `?assembled` on the URL: a way to land on her idle state
+  // at once when tuning, and the way a headless browser without a real GPU
+  // clock can be made to show her assembled at all.
+  const skipAssembly =
+    matchMedia("(prefers-reduced-motion: reduce)").matches ||
+    (process.env.NODE_ENV !== "production" && new URLSearchParams(location.search).has("assembled"));
+  const reduced = skipAssembly;
 
   let renderer: THREE.WebGLRenderer;
   try {

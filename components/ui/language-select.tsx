@@ -35,7 +35,12 @@ export function LanguageSelect({
   }, [open]);
 
   return (
-    <div ref={root} className={`relative ${className}`}>
+    // No positioning of its own: the caller places it. Setting `relative`
+    // here alongside a caller's `absolute` left two position utilities on one
+    // element, and which one won was an accident of stylesheet order; when
+    // `relative` won, the bottom/right offsets did nothing and the control
+    // fell into normal flow, below the fold and off screen.
+    <div ref={root} className={className}>
       {/* The list opens upward, in a frame that traces itself in: this
           control lives at the bottom of the instrument. Each row reveals a
           beat after the one above, in steps, so the list arrives rather than

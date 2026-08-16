@@ -101,7 +101,15 @@ export function PresenceCanvas() {
           // Assembly has just finished and she has gone idle by default. If
           // the socket has not opened yet she is not actually ready, so she
           // shows that instead of looking present with no line behind her.
-          if (s === "idle" && !connectedRef.current) presence.setState("connecting");
+          //
+          // Through the ref, and deferred a tick: with reduced motion the
+          // scene reports idle synchronously from inside createPresence(),
+          // before its return value exists. Naming it here directly threw
+          // "cannot access before initialization" and took the page down for
+          // every reduced-motion user.
+          if (s === "idle" && !connectedRef.current) {
+            queueMicrotask(() => handle.current?.setState("connecting"));
+          }
         },
       });
       handle.current = presence;
@@ -719,7 +727,7 @@ export function PresenceCanvas() {
           one column with a fixed gap so they cannot touch whatever their
           sizes. The rail is always shown, because it is where the connection
           is reported while she assembles; the ring arrives once she has. */}
-      <div className="absolute inset-x-0 bottom-[max(2.25rem,env(safe-area-inset-bottom))] sm:bottom-10 flex flex-col items-center justify-center gap-4 px-4 group-data-[gpu=off]:hidden">
+      <div className="pointer-events-none absolute inset-x-0 bottom-[max(2.25rem,env(safe-area-inset-bottom))] sm:bottom-10 flex flex-col items-center justify-center gap-4 px-4 group-data-[gpu=off]:hidden [&>*]:pointer-events-auto">
         <StatusStrip
           state={state}
           connected={connected}
@@ -748,7 +756,9 @@ export function PresenceCanvas() {
         <LanguageSelect
           value={lang}
           onChange={setLang}
-          className="absolute bottom-[max(2.25rem,env(safe-area-inset-bottom))] right-10 group-data-[gpu=off]:hidden sm:right-12 sm:bottom-10"
+          // Above the ring column, which is absolute and full-width at the same
+          // bottom offset and was painting over this and taking its clicks.
+          className="absolute bottom-[max(2.25rem,env(safe-area-inset-bottom))] right-10 z-20 group-data-[gpu=off]:hidden sm:right-12 sm:bottom-10"
         />
       )}
 
